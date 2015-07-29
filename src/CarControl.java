@@ -52,11 +52,13 @@ class Alley{
 	Pos alleyUpEntrance1, alleyUpEntrance2, alleyUpExit, alleyDownEntrance, alleyDownExit1, alleyDownExit2;
 	Pos curpos;
 	Car[] cars;
+	boolean first;
+	boolean second;
 	public Alley(Car[] c){
 		inUse1 = new Semaphore(1);
 		inUse2 = new Semaphore(1);
 		cars = c;
-		useDown=useUp=0;
+		useDown=0;
 		up = down1 = down2 = 4;
 		alleyUpEntrance1= new Pos(8,1);
 		alleyUpEntrance2= new Pos(9,3);
@@ -64,6 +66,18 @@ class Alley{
 		alleyDownEntrance= new Pos(0,0);
 		alleyDownExit1 = new Pos (8,0);
 		alleyDownExit2 = new Pos (9,2);
+		first = true;
+		second = true;
+	}
+	public static <PrintableToString> void println(PrintableToString... args) {
+		for (PrintableToString pts : args)
+			System.out.print(pts);
+		System.out.println();
+	}
+
+	public static <PrintableToString> void print(PrintableToString... args) {
+		for (PrintableToString pts : args)
+			System.out.print(pts);
 	}
 
 	public boolean enterAlley1(Car c){
@@ -108,58 +122,95 @@ class Alley{
 	}
 
 	public void enter(int no) throws InterruptedException {
-		if(enterAlley1(cars[no])){
-
-			if(up == 4  && (no==1||no==2) ) {
+		if((    enterAlley1(cars[no]) && (no==1||no==2) || 
+				enterAlley2(cars[no]) && (no==3||no==4))){
+			if(up == 4 ) {
+				useDown++;
 				inUse1.P();
 			}
 			up--;
-		}else if(enterAlley2(cars[no])){
+		}
+		else if(enterAlley3(cars[no])) {
 
-			if(up == 4  && (no==3 || no==4) ){
-				inUse2.P();
-			}
-			up--;
-		}else if(enterAlley3(cars[no])) {
-
-			if(down1 == 4 && down2==4 && no > 4 ){
-				inUse2.P();
+			if(down1 == 4 && no > 4){
 				inUse1.P();
 			}
 			down1--;
-			down2--;
-		}
+		}	
 	}
-
 
 	public void leave(int no) throws InterruptedException {
-	if(leaveAlley1(cars[no])){
-		if(no>4 && down1 < 4)
-			down1++;
-			if(up == 4 && down1 == 4){
+		if(leaveAlley2(cars[no])) {
+			if(no>4 && down1 < 4)
+				down1++;
+
+			if(down1 == 4){
+				if(useDown>1){
+					inUse1.V();
+				}
+				inUse1.V();
+				useDown=0;
+			}
+		}else if(leaveAlley3(cars[no])){
+			if(no<=4)
+				up++;
+			if(up == 4){
 				inUse1.V();
 			}
-
-	}else if(leaveAlley2(cars[no])) {
-		if(no>4 && down2 < 4)
-			down2++;
-		if(up == 4 && down2 == 4){
-			inUse2.V();
-		}
-	}else if(leaveAlley3(cars[no])){
-		if(no<=4)
-			up++;
-
-		if(up == 4 && down1 == 4 && down2==4){
-			inUse2.V();
-			inUse1.V();
-		}
 		}
 	}
-
-
-
 }
+
+class Barrier {
+	boolean barrier;
+	Semaphore queue;
+	Car[] cars;
+	int atBarrier;
+	int active;
+	public Barrier(Car[] c){
+		atBarrier = 0;
+		
+		barrier = false;
+		cars=c;
+		queue=new Semaphore(0);
+	}
+	public void sync(int no) throws InterruptedException {
+		active=8;
+		if (cars[0].mygate.isopen||cars[0].curpos.equals(cars[0].barpos))
+			active++;
+
+		Car c=cars[no];
+		if(barrier){
+			if(c.curpos.equals(c.barpos)){
+				atBarrier++;
+				if(atBarrier==active)
+					for(int i=0;i<active;i++){
+						
+						atBarrier=0;
+						queue.V();
+						}
+				queue.P();
+			}
+		}
+	}  // Wait for others to arrive (if barrier active)
+	
+	
+	public void on() throws InterruptedException { 
+		barrier=true;
+	}    // Activate barrier
+
+	public void off() {
+		if(barrier){
+			barrier=false;
+			for(int i=0;i<atBarrier;i++)
+				queue.V();
+				
+			
+			atBarrier=0;
+		}
+	}   // Deactivate barrier 
+		
+	}
 
 class Car extends Thread {
 
@@ -173,18 +224,19 @@ class Car extends Thread {
 	Pos barpos; // Barrierpositon (provided by GUI)
 	Color col; // Car color
 	Gate mygate; // Gate at startposition
-
 	int speed; // Current car speed
 	Pos curpos; // Current position
 	Pos newpos; // New position to go to
 	Semaphore track[][]; // race track for cars
+	int active=0;
 	Alley alley;
-
-	public Car(int no, CarDisplayI cd, Gate g, Semaphore[][] t, Alley a) {
+	Barrier barrier;
+	public Car(int no, CarDisplayI cd, Gate g, Semaphore[][] t, Alley a, Barrier b) {
 		this.no = no;
 		this.cd = cd;
 		mygate = g;
 		alley = a;
+		barrier = b;
 		startpos = cd.getStartPos(no);
 		barpos = cd.getBarrierPos(no); // For later use
 
@@ -193,7 +245,7 @@ class Car extends Thread {
 
 		// do not change the special settings for car no. 0
 		if (no == 0) {
-			basespeed = 0;
+			basespeed = 100;
 			variation = 0;
 			setPriority(Thread.MAX_PRIORITY);
 		}
@@ -264,10 +316,12 @@ class Car extends Thread {
 					mygate.pass();
 					speed = chooseSpeed();
 				}
+				
+				barrier.sync(no);
 				alley.leave(no);
 				newpos = nextPos(curpos);
 				alley.enter(no);
-
+				
 				track[newpos.col][newpos.row].P();
 				// Move to new position
 				cd.clear(curpos);
@@ -296,13 +350,14 @@ public class CarControl implements CarControlI {
 	Car[] car; // Cars
 	Gate[] gate; // Gates
 	Semaphore[][] track; // Track
-	Semaphore inUse; //Alley
 	Alley alley;
+	Barrier barrier;
 	public CarControl(CarDisplayI cd) {
 		this.cd = cd;
 		car = new Car[9];
 		gate = new Gate[9];
 		alley = new Alley(car);
+		barrier= new Barrier(car);
 		track = new Semaphore[12][11];
 		while (i < 12) {
 			int  j = 0;
@@ -314,7 +369,7 @@ public class CarControl implements CarControlI {
 		}
 		for (int no = 0; no < 9; no++) {
 			gate[no] = new Gate();
-			car[no] = new Car(no, cd, gate[no], track, alley);
+			car[no] = new Car(no, cd, gate[no], track, alley, barrier);
 			car[no].start();
 		}
 		alley = new Alley(car);
@@ -329,11 +384,16 @@ public class CarControl implements CarControlI {
 	}
 
 	public void barrierOn() {
-		cd.println("Barrier On not implemented in this version");
+		try {
+			barrier.on();
+		} catch (InterruptedException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
 	}
 
 	public void barrierOff() {
-		cd.println("Barrier Off not implemented in this version");
+		barrier.off();
 	}
 
 	public void barrierSet(int k) {
