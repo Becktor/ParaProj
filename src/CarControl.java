@@ -2,7 +2,7 @@
 //Mandatory assignment
 //Course 02158 Concurrent Programming, DTU, Fall 2014
 
-//Hans Henrik LÃ¸vengreen    Oct 6, 2014
+//Hans Henrik Løvengreen    Oct 6, 2014
 
 import java.awt.Color;
 
@@ -47,37 +47,22 @@ class Gate {
 }
 
 class Alley{
-	Semaphore inUse1,inUse2;
-	int up,down1,down2,useUp, useDown;
+	Semaphore inUse;
+	int up,down,useUp, waiting;
 	Pos alleyUpEntrance1, alleyUpEntrance2, alleyUpExit, alleyDownEntrance, alleyDownExit1, alleyDownExit2;
 	Pos curpos;
 	Car[] cars;
-	boolean first;
-	boolean second;
 	public Alley(Car[] c){
-		inUse1 = new Semaphore(1);
-		inUse2 = new Semaphore(1);
+		inUse = new Semaphore(1);
 		cars = c;
-		useDown=0;
-		up = down1 = down2 = 4;
+		waiting=0;
+		up = down = 4;
 		alleyUpEntrance1= new Pos(8,1);
 		alleyUpEntrance2= new Pos(9,3);
 		alleyUpExit = new Pos (1,0);
 		alleyDownEntrance= new Pos(0,0);
 		alleyDownExit1 = new Pos (8,0);
 		alleyDownExit2 = new Pos (9,2);
-		first = true;
-		second = true;
-	}
-	public static <PrintableToString> void println(PrintableToString... args) {
-		for (PrintableToString pts : args)
-			System.out.print(pts);
-		System.out.println();
-	}
-
-	public static <PrintableToString> void print(PrintableToString... args) {
-		for (PrintableToString pts : args)
-			System.out.print(pts);
 	}
 
 	public boolean enterAlley1(Car c){
@@ -98,25 +83,21 @@ class Alley{
 		else
 			return false;
 	}
-
 	public boolean leaveAlley1(Car c){
 		if ((c.curpos.equals(alleyDownExit1) && c.no>4))
 			return true;
-
 		else
 			return false;
 	}
 	public boolean leaveAlley2(Car c){
 		if (c.curpos.equals(alleyDownExit2) && c.no>4)
 			return true;
-
 		else
 			return false;
 	}
 	public boolean leaveAlley3(Car c){
 		if ((c.curpos.equals(alleyUpExit) && c.no<=4))
 			return true;
-
 		else
 			return false;
 	}
@@ -125,40 +106,93 @@ class Alley{
 		if((    enterAlley1(cars[no]) && (no==1||no==2) || 
 				enterAlley2(cars[no]) && (no==3||no==4))){
 			if(up == 4 ) {
-				useDown++;
-				inUse1.P();
+				waiting++;
+				inUse.P();
 			}
 			up--;
 		}
 		else if(enterAlley3(cars[no])) {
 
-			if(down1 == 4 && no > 4){
-				inUse1.P();
+			if(down == 4 && no > 4){
+				inUse.P();
 			}
-			down1--;
+			down--;
 		}	
 	}
 
 	public void leave(int no) throws InterruptedException {
 		if(leaveAlley2(cars[no])) {
-			if(no>4 && down1 < 4)
-				down1++;
+			if(no>4 && down < 4)
+				down++;
 
-			if(down1 == 4){
-				if(useDown>1){
-					inUse1.V();
+			if(down == 4){
+				if(waiting>1){
+					inUse.V();
 				}
-				inUse1.V();
-				useDown=0;
+				inUse.V();
+				waiting=0;
 			}
 		}else if(leaveAlley3(cars[no])){
 			if(no<=4)
 				up++;
 			if(up == 4){
-				inUse1.V();
+				inUse.V();
 			}
 		}
 	}
+}
+
+class AlleyMonitor extends Alley{
+	int up,down;
+	Car[] cars;
+	public AlleyMonitor(Car[] c){
+		super(c);
+		cars=c;
+		up = down = 0;
+	}
+	@Override
+	synchronized public void enter(int no) throws InterruptedException {
+		Car c = cars[no];
+		if((    enterAlley1(c) && (no==1||no==2) || 
+				enterAlley2(c) && (no==3||no==4))){
+			if(down > 0 ) 
+				wait();
+			up++;
+			c.inAlley=true;
+		}
+		else if(enterAlley3(c)) {
+			if(up > 0 && no > 4)
+				wait();
+			down++;
+			c.inAlley=true;
+		}	
+	}
+
+	
+	@Override
+	synchronized public void leave(int no) throws InterruptedException {
+		Car c = cars[no];
+		if(leaveAlley2(c)) {
+			if(no>4 && down > 0){
+				down--;
+				c.inAlley=false;
+			}
+			if(down == 0)
+				notifyAll();
+			
+		}else if(leaveAlley3(c)){
+			if(no<=4){
+				up--;
+				c.inAlley =false;
+			}
+			if(up == 0)
+				notifyAll();
+		}
+	}
+	synchronized public void notifyThem() {
+		notifyAll();
+	}
+
 }
 
 class Barrier {
@@ -169,7 +203,6 @@ class Barrier {
 	int active;
 	public Barrier(Car[] c){
 		atBarrier = 0;
-		
 		barrier = false;
 		cars=c;
 		queue=new Semaphore(0);
@@ -185,7 +218,6 @@ class Barrier {
 				atBarrier++;
 				if(atBarrier==active)
 					for(int i=0;i<active;i++){
-						
 						atBarrier=0;
 						queue.V();
 						}
@@ -212,6 +244,55 @@ class Barrier {
 		
 	}
 
+class BarrierMonitor extends Barrier {
+	boolean barrier;
+	Car[] cars;
+	int atBarrier;
+	int active;
+	
+	public BarrierMonitor(Car[] c) {
+		super(c);
+		atBarrier = 0;
+		barrier = false;
+		cars=c;
+	}
+	  @Override
+	  synchronized public void sync(int no) throws InterruptedException {
+		active=8;
+		if (cars[0].mygate.isopen||cars[0].curpos.equals(cars[0].barpos))
+			active++;
+
+		Car c=cars[no];
+		if(barrier){
+			if(c.curpos.equals(c.barpos)){
+				atBarrier++;
+				if(atBarrier>=active){
+					for(int i=0;i<=active;i++){
+						atBarrier=0;
+		                notifyAll();
+		                
+						}
+				}else
+					wait();
+			}
+		}
+	}  
+	  @Override
+	  synchronized public void on(){ 
+		barrier=true;
+	}    // Activate barrier
+
+	@Override
+	synchronized public void off() {
+		if(barrier){
+			barrier=false;
+			for(int i=0;i<atBarrier;i++)
+				notifyAll();
+			atBarrier=0;
+		}
+	}
+
+}
 class Car extends Thread {
 
 	int basespeed = 100; // Rather: degree of slowness
@@ -229,9 +310,11 @@ class Car extends Thread {
 	Pos newpos; // New position to go to
 	Semaphore track[][]; // race track for cars
 	int active=0;
-	Alley alley;
-	Barrier barrier;
-	public Car(int no, CarDisplayI cd, Gate g, Semaphore[][] t, Alley a, Barrier b) {
+	AlleyMonitor alley;
+	BarrierMonitor barrier;
+	boolean enabled;
+	boolean inAlley;
+	public Car(int no, CarDisplayI cd, Gate g, Semaphore[][] t, AlleyMonitor a, BarrierMonitor b) {
 		this.no = no;
 		this.cd = cd;
 		mygate = g;
@@ -239,13 +322,13 @@ class Car extends Thread {
 		barrier = b;
 		startpos = cd.getStartPos(no);
 		barpos = cd.getBarrierPos(no); // For later use
-
 		track = t;
 		col = chooseColor();
-
+		enabled = true;
+		inAlley = false;
 		// do not change the special settings for car no. 0
 		if (no == 0) {
-			basespeed = 100;
+			basespeed = 0;
 			variation = 0;
 			setPriority(Thread.MAX_PRIORITY);
 		}
@@ -299,46 +382,95 @@ class Car extends Thread {
 		for (PrintableToString pts : args)
 			System.out.print(pts);
 	}
+	
+	public synchronized void disable(int flag) throws InterruptedException{
+		if(flag==1){
+			cd.clear(curpos);
+			track[curpos.col][curpos.row].V();
+		}else if(flag==2){
+			cd.clear(curpos,newpos);
+			track[newpos.col][newpos.row].V();
+			track[curpos.col][curpos.row].V();
+		}else{
+			cd.clear(curpos);
+			track[curpos.col][curpos.row].V();
+		}
+		
+	
+		if(inAlley){
+			if(no<=4) {
+				alley.up++; 
+				if(alley.up==4)
+					alley.notifyThem();
+			}
+			else {
+				alley.down++;
+				if(alley.down==4)
+					alley.notifyThem();
+			}
+		}
+
+		wait();
+				
+	}
+
+	public synchronized void enable() throws InterruptedException{
+	
+		speed = chooseSpeed();
+		curpos = startpos;
+		cd.mark(curpos, col, no);
+		newpos = nextPos(curpos);
+		track[curpos.col][curpos.row].P();
+		notifyAll();
+		
 
 
-
+	}
 	public void run() {
 		try {
+			
 			Pos prevPos;
 			speed = chooseSpeed();
 			curpos = startpos;
 			cd.mark(curpos, col, no);
-			
+			int flag=0;
 			while (true) {
-				sleep(speed());
-
-				if (atGate(curpos)) {
-					mygate.pass();
-					speed = chooseSpeed();
+				try {
+						sleep(speed());
+						flag=1;
+						if (atGate(curpos)) {
+							mygate.pass();
+							speed = chooseSpeed();
+						}
+						barrier.sync(no);
+						alley.leave(no);
+						newpos = nextPos(curpos);
+						alley.enter(no);
+						track[newpos.col][newpos.row].P();
+						
+						flag=2;
+						// Move to new position
+						cd.clear(curpos);
+						cd.mark(curpos, newpos, col, no);
+						sleep(speed());
+						flag=0;
+						cd.clear(curpos, newpos);
+						cd.mark(newpos, col, no);
+						prevPos = curpos;
+						curpos = newpos;
+						track[prevPos.col][prevPos.row].V();
+				}catch (InterruptedException e) {
+					try {
+						disable(flag);
+					} catch (InterruptedException e1) {
+						// TODO Auto-generated catch block
+						e1.printStackTrace();
+					}
 				}
-				
-				barrier.sync(no);
-				alley.leave(no);
-				newpos = nextPos(curpos);
-				alley.enter(no);
-				
-				track[newpos.col][newpos.row].P();
-				// Move to new position
-				cd.clear(curpos);
-				cd.mark(curpos, newpos, col, no);
-				sleep(speed());
-				cd.clear(curpos, newpos);
-				cd.mark(newpos, col, no);
-				prevPos = curpos;
-				curpos = newpos;
-				track[prevPos.col][prevPos.row].V();
-				
 			}
-
-		} catch (Exception e) {
-			cd.println("Exception in Car no. " + no);
-			System.err.println("Exception in Car no. " + no + ":" + e);
-			e.printStackTrace();
+		}catch (Exception e) {
+	
+				e.printStackTrace();
 		}
 	}
 
@@ -350,14 +482,14 @@ public class CarControl implements CarControlI {
 	Car[] car; // Cars
 	Gate[] gate; // Gates
 	Semaphore[][] track; // Track
-	Alley alley;
-	Barrier barrier;
+	AlleyMonitor alley;
+	BarrierMonitor barrier;
 	public CarControl(CarDisplayI cd) {
 		this.cd = cd;
 		car = new Car[9];
 		gate = new Gate[9];
-		alley = new Alley(car);
-		barrier= new Barrier(car);
+		alley = new AlleyMonitor(car);
+		barrier= new BarrierMonitor(car);
 		track = new Semaphore[12][11];
 		while (i < 12) {
 			int  j = 0;
@@ -372,7 +504,6 @@ public class CarControl implements CarControlI {
 			car[no] = new Car(no, cd, gate[no], track, alley, barrier);
 			car[no].start();
 		}
-		alley = new Alley(car);
 	}
 
 	public void startCar(int no) {
@@ -384,12 +515,7 @@ public class CarControl implements CarControlI {
 	}
 
 	public void barrierOn() {
-		try {
-			barrier.on();
-		} catch (InterruptedException e) {
-			// TODO Auto-generated catch block
-			e.printStackTrace();
-		}
+		barrier.on();
 	}
 
 	public void barrierOff() {
@@ -406,12 +532,31 @@ public class CarControl implements CarControlI {
 		}
 	}
 
+
 	public void removeCar(int no) {
-		cd.println("Remove Car not implemented in this version");
+		
+	
+		Car c = car[no];
+		if(c.enabled){
+			c.enabled = false;
+			cd.println("Destroy Car");	
+			c.interrupt();
+		}
+		
 	}
 
 	public void restoreCar(int no) {
-		cd.println("Restore Car not implemented in this version");
+		Car c = car[no];
+		if(!c.enabled){
+			c.enabled = true;
+			cd.println("Restore Car");
+			try {
+				car[no].enable();
+			} catch (InterruptedException e) {
+				// TODO Auto-generated catch block
+				e.printStackTrace();
+			}
+		}
 	}
 
 	/* Speed settings for testing purposes */
